@@ -1,6 +1,22 @@
 // RaceToCollect.cpp : This file contains the 'main' function. Program execution begins and ends there.
 //
 
+/*
+        2 Player Race to Collect
+
+Goal is to create a console application that can play a simple Sever Controlled 2
+player Race To Collect Game.
+
+Create a display that shows the board in the console.
+- Display the boundried of the board ("|" on the left/ right side is enough)
+- Use "1" to represent Player 1.
+- Use "2" to represent Player 2.
+- Use "0" for the collect item.
+- Can make more detailed if desired.
+- Use system("cls") to rebuild the board each frame.
+
+*/
+
 #include <iostream>
 
 int main()
