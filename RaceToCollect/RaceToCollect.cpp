@@ -71,17 +71,17 @@ struct GameState
 };
 
 // Rendering 
-void DrawBoard(const GameState& state) 
+void DrawBoard(const GameState& state)
 {
     system("cls");
 
     cout << "P1 Score: " << state.p1Score << "  |  P2 Score: " << state.p2Score << "\n";
     cout << string(BOARD_WIDTH + 2, '-') << "\n";
 
-    for (int y = 0; y < BOARD_HEIGHT; y++) 
+    for (int y = 0; y < BOARD_HEIGHT; y++)
     {
         cout << "|";
-        for (int x = 0; x < BOARD_WIDTH; x++) 
+        for (int x = 0; x < BOARD_WIDTH; x++)
         {
             if (x == state.p1X && y == state.p1Y) cout << "1";
             else if (x == state.p2X && y == state.p2Y) cout << "2";
@@ -94,57 +94,97 @@ void DrawBoard(const GameState& state)
     cout << string(BOARD_WIDTH + 2, '-') << "\n";
 }
 
-// Networking Helpers 
-bool InitializeWinsock() 
+bool InitializeWinsock()
 {
     WSADATA data;
     WORD version = MAKEWORD(2, 2);
-    int wsResult = WSAStartup(version, &data);
-    if (wsResult != 0) 
-    {
-        cout << "Can't start Winsock, Err #" << wsResult << "\n";
-        return false;
-    }
-    return true;
+    return WSAStartup(version, &data) == 0;
 }
 
-void RunServer() 
+// set sockets to non-blocking so the game doesn't freeze waiting for inputs
+void SetNonBlocking(SOCKET sock)
 {
-    if (!InitializeWinsock())
-    {
-        return;
-    }
+    u_long mode = 1;
+    ioctlsocket(sock, FIONBIO, &mode);
+}
+
+void SpawnItem(GameState* state)
+{
+    state->itemX = rand() % BOARD_WIDTH;
+    state->itemY = rand() % BOARD_HEIGHT;
+}
+
+void ProcessInput(char input, int* x, int* y)
+{
+    if (input == 'w' && *y > 0) (*y)--;
+    if (input == 's' && *y < BOARD_HEIGHT - 1) (*y)++;
+    if (input == 'a' && *x > 0) (*x)--;
+    if (input == 'd' && *x < BOARD_WIDTH - 1) (*x)++;
+}
+
+// bind the ip address and port to a socket
+void RunServer()
+{
+    if (!InitializeWinsock()) return;
 
     SOCKET listening = socket(AF_INET, SOCK_STREAM, 0);
-    if (listening == INVALID_SOCKET) 
-    {
-        cout << "Can't create a socket! Quitting\n";
-        return;
-    }
-
-    // bind the ip address and port to a socket
     sockaddr_in hint;
     hint.sin_family = AF_INET;
     hint.sin_port = htons(PORT);
     hint.sin_addr.S_un.S_addr = INADDR_ANY;
 
     bind(listening, (sockaddr*)&hint, sizeof(hint));
-
-    // tell Winsock the socket is for listening 
     listen(listening, SOMAXCONN);
 
-    cout << "Server listening on port " << PORT << "...\nWaiting for Player 1...\n";
+    cout << "Waiting for players...\n";
 
-    // Wait for a connection
-    sockaddr_in client1Hint;
-    int client1Size = sizeof(client1Hint);
-    SOCKET client1 = accept(listening, (sockaddr*)&client1Hint, &client1Size);
-    cout << "Player 1 connected!\nWaiting for Player 2...\n";
+    SOCKET client1 = accept(listening, nullptr, nullptr);
+    cout << "Player 1 connected!\n";
 
-    sockaddr_in client2Hint;
-    int client2Size = sizeof(client2Hint);
-    SOCKET client2 = accept(listening, (sockaddr*)&client2Hint, &client2Size);
-    cout << "Player 2 connected!\n\nAll players ready! (Game loop coming in next commit)\n";
+    SOCKET client2 = accept(listening, nullptr, nullptr);
+    cout << "Player 2 connected!\n";
+
+    SetNonBlocking(client1);
+    SetNonBlocking(client2);
+
+    GameState state;
+    srand(GetTickCount());
+
+    while (!state.gameOver)
+    {
+        char p1Input = 0;
+        char p2Input = 0;
+
+        int p1Bytes = recv(client1, &p1Input, sizeof(p1Input), 0);
+        int p2Bytes = recv(client2, &p2Input, sizeof(p2Input), 0);
+
+        if (p1Bytes > 0)
+        {
+            ProcessInput(p1Input, &state.p1X, &state.p1Y);
+        }
+
+        if (p2Bytes > 0)
+        {
+            ProcessInput(p2Input, &state.p2X, &state.p2Y);
+        }
+
+        // basic collision check
+        if (state.p1X == state.itemX && state.p1Y == state.itemY)
+        {
+            state.p1Score++;
+            SpawnItem(&state);
+        }
+        else if (state.p2X == state.itemX && state.p2Y == state.itemY)
+        {
+            state.p2Score++;
+            SpawnItem(&state);
+        }
+
+        send(client1, (char*)&state, sizeof(GameState), 0);
+        send(client2, (char*)&state, sizeof(GameState), 0);
+
+        Sleep(30);
+    }
 
     closesocket(client1);
     closesocket(client2);
@@ -152,65 +192,64 @@ void RunServer()
     WSACleanup();
 }
 
-void RunClient() 
+void RunClient()
 {
-    if (!InitializeWinsock())
-    {
-        return;
-    }
+    if (!InitializeWinsock()) return;
 
     SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock == INVALID_SOCKET) 
-    {
-        cout << "Can't create socket, Err #" << WSAGetLastError() << "\n";
-        return;
-    }
-
     sockaddr_in hint;
     hint.sin_family = AF_INET;
     hint.sin_port = htons(PORT);
     inet_pton(AF_INET, SERVER_IP.c_str(), &hint.sin_addr);
 
-    // Connect to server
-    int connResult = connect(sock, (sockaddr*)&hint, sizeof(hint));
-    if (connResult == SOCKET_ERROR) 
+    connect(sock, (sockaddr*)&hint, sizeof(hint));
+    SetNonBlocking(sock);
+
+    GameState state;
+
+    while (true)
     {
-        cout << "Can't connect to server, Err #" << WSAGetLastError() << "\n";
-        closesocket(sock);
-        WSACleanup();
-        return;
+        if (_kbhit())
+        {
+            char input = _getch();
+            send(sock, &input, sizeof(input), 0);
+        }
+
+        int bytesIn = recv(sock, (char*)&state, sizeof(GameState), 0);
+        if (bytesIn > 0)
+        {
+            DrawBoard(state);
+        }
+
+        Sleep(10);
     }
-
-    cout << "Connected to server!\nWaiting for game to start...\n";
-
 
     closesocket(sock);
     WSACleanup();
 }
 
-int main() 
+int main()
 {
     cout << "Race To Collect!\n";
     cout << "Select Mode:\n1. Server\n2. Client\nChoice: ";
     int choice;
     cin >> choice;
 
-    if (choice == 1) 
+    if (choice == 1)
     {
         cout << "\nStarting Server...\n";
         RunServer();
     }
-    else if (choice == 2) 
+    else if (choice == 2)
     {
         cout << "\nStarting Client...\n";
         RunClient();
     }
-    else 
+    else
     {
         cout << "Invalid choice. Exiting.\n";
     }
 
-    system("pause"); // Keep terminal open to see results
     return 0;
 }
 
