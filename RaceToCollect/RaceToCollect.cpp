@@ -137,10 +137,8 @@ void RunServer()
     listen(listening, SOMAXCONN);
 
     cout << "Waiting for players...\n";
-
     SOCKET client1 = accept(listening, nullptr, nullptr);
     cout << "Player 1 connected!\n";
-
     SOCKET client2 = accept(listening, nullptr, nullptr);
     cout << "Player 2 connected!\n";
 
@@ -150,34 +148,66 @@ void RunServer()
     GameState state;
     srand(GetTickCount());
 
-    while (!state.gameOver)
+    bool quit = false;
+    bool p1Ready = false;
+    bool p2Ready = false;
+
+    while (!quit)
     {
         char p1Input = 0;
         char p2Input = 0;
 
-        int p1Bytes = recv(client1, &p1Input, sizeof(p1Input), 0);
-        int p2Bytes = recv(client2, &p2Input, sizeof(p2Input), 0);
+        recv(client1, &p1Input, sizeof(p1Input), 0);
+        recv(client2, &p2Input, sizeof(p2Input), 0);
 
-        if (p1Bytes > 0)
+        if (!state.gameOver)
         {
-            ProcessInput(p1Input, &state.p1X, &state.p1Y);
-        }
+            if (p1Input != 0) ProcessInput(p1Input, &state.p1X, &state.p1Y);
+            if (p2Input != 0) ProcessInput(p2Input, &state.p2X, &state.p2Y);
 
-        if (p2Bytes > 0)
-        {
-            ProcessInput(p2Input, &state.p2X, &state.p2Y);
-        }
+            if (state.p1X == state.itemX && state.p1Y == state.itemY)
+            {
+                state.p1Score++;
+                SpawnItem(&state);
+            }
+            else if (state.p2X == state.itemX && state.p2Y == state.itemY)
+            {
+                state.p2Score++;
+                SpawnItem(&state);
+            }
 
-        // basic collision check
-        if (state.p1X == state.itemX && state.p1Y == state.itemY)
-        {
-            state.p1Score++;
-            SpawnItem(&state);
+            // win check
+            if (state.p1Score >= WIN_SCORE)
+            {
+                state.gameOver = true;
+                state.winner = 1;
+            }
+            else if (state.p2Score >= WIN_SCORE)
+            {
+                state.gameOver = true;
+                state.winner = 2;
+            }
         }
-        else if (state.p2X == state.itemX && state.p2Y == state.itemY)
+        else
         {
-            state.p2Score++;
-            SpawnItem(&state);
+            if (p1Input == 'r') p1Ready = true;
+            if (p2Input == 'r') p2Ready = true;
+            if (p1Input == 'q' || p2Input == 'q') quit = true;
+
+            // restart game loop
+            if (p1Ready && p2Ready)
+            {
+                state.p1Score = 0;
+                state.p2Score = 0;
+                state.p1X = 2; state.p1Y = 7;
+                state.p2X = 27; state.p2Y = 7;
+                state.gameOver = false;
+                state.winner = 0;
+                SpawnItem(&state);
+
+                p1Ready = false;
+                p2Ready = false;
+            }
         }
 
         send(client1, (char*)&state, sizeof(GameState), 0);
@@ -206,6 +236,7 @@ void RunClient()
     SetNonBlocking(sock);
 
     GameState state;
+    bool localGameOver = false;
 
     while (true)
     {
@@ -216,9 +247,28 @@ void RunClient()
         }
 
         int bytesIn = recv(sock, (char*)&state, sizeof(GameState), 0);
+
+        // break out if the server drops connection or quits
+        if (bytesIn == 0 || (bytesIn == SOCKET_ERROR && WSAGetLastError() != WSAEWOULDBLOCK))
+        {
+            cout << "\nDisconnected from server.\n";
+            break;
+        }
+
         if (bytesIn > 0)
         {
-            DrawBoard(state);
+            if (!state.gameOver)
+            {
+                localGameOver = false;
+                DrawBoard(state);
+            }
+            else if (!localGameOver)
+            {
+                localGameOver = true;
+                DrawBoard(state);
+                cout << "\nPlayer " << state.winner << " wins!\n";
+                cout << "Press 'r' to restart or 'q' to quit.\n";
+            }
         }
 
         Sleep(10);
